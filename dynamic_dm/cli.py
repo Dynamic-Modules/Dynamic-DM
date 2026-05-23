@@ -167,6 +167,7 @@ def print_report(patch_sets: list[PatchSet], *, as_json: bool) -> None:
                             "operations": [
                                 {
                                     "mode": operation.mode,
+                                    "dm_path": operation.dm_path,
                                     "has_end_anchor": operation.end_anchor is not None,
                                     "occurrence": operation.occurrence,
                                     "strategy": operation.strategy,

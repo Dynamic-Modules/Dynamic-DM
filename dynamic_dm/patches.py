@@ -7,6 +7,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable
 
+from .dm_ast import DmDefinition, parse_dm_source
+
 
 MIN_REPLACE_LINE_CAP = 24
 MAX_DELETE_LINES = 100
@@ -27,6 +29,7 @@ class PatchOperation:
     occurrence: int = 1
     strategy: str = "line-hunk"
     sort_index: int = 0
+    dm_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,7 @@ def create_patch_set(
 
     warnings: list[str] = []
     candidates = [
+        ("dm semantic", infer_dm_semantic_operations),
         ("line replacements", infer_independent_line_replacements),
         ("single hunk", infer_single_hunk),
         ("multiple hunks", infer_line_hunks),
@@ -89,6 +93,174 @@ def create_patch_set(
 
     warnings.append("Could not infer patch operations that reproduce the local source.")
     return PatchSet(target_file=target_file, warnings=warnings)
+
+
+def infer_dm_semantic_operations(
+    upstream_source: str,
+    local_source: str,
+) -> list[PatchOperation] | None:
+    upstream = parse_dm_source(upstream_source)
+    local = parse_dm_source(local_source)
+    upstream_defs = upstream.unique_definitions
+    local_defs = local.unique_definitions
+    if not upstream_defs or not local_defs:
+        return None
+
+    upstream_paths = set(upstream_defs)
+    local_paths = set(local_defs)
+    changed_paths = {
+        path
+        for path in upstream_paths & local_paths
+        if upstream_defs[path].text != local_defs[path].text
+    }
+    added_paths = local_paths - upstream_paths
+    deleted_paths = upstream_paths - local_paths
+    all_change_paths = changed_paths | added_paths | deleted_paths
+    if not all_change_paths:
+        return None
+
+    operations: list[PatchOperation] = []
+    for path in sorted(leaf_paths(changed_paths, all_change_paths), key=lambda item: upstream_defs[item].start_offset):
+        operation = infer_dm_definition_replacement(upstream_source, upstream_defs[path], local_defs[path])
+        if not operation:
+            return None
+        operations.append(operation)
+
+    for path in sorted(leaf_paths(added_paths, added_paths), key=lambda item: local_defs[item].start_offset):
+        operation = infer_dm_definition_insert(
+            upstream_source,
+            local_defs[path],
+            upstream_defs,
+            local_defs,
+        )
+        if not operation:
+            return None
+        operations.append(operation)
+
+    for path in sorted(leaf_paths(deleted_paths, deleted_paths), key=lambda item: upstream_defs[item].start_offset):
+        definition = upstream_defs[path]
+        operations.append(
+            PatchOperation(
+                mode="replace",
+                anchor=definition.text,
+                content="",
+                occurrence=block_occurrence(upstream_source, definition.text, definition.start_line - 1),
+                strategy="dm-definition-delete",
+                sort_index=definition.start_line,
+                dm_path=definition.path,
+            )
+        )
+
+    if not operations or len(operations) > MAX_OPERATIONS:
+        return None
+    return sorted_for_application(operations)
+
+
+def infer_dm_definition_replacement(
+    upstream_source: str,
+    upstream_definition: DmDefinition,
+    local_definition: DmDefinition,
+) -> PatchOperation | None:
+    if upstream_definition.header == local_definition.header and upstream_definition.next_boundary:
+        end_anchor = line_anchor(upstream_definition.next_boundary)
+        if end_anchor:
+            return PatchOperation(
+                mode="replace_between",
+                anchor=line_anchor(upstream_definition.header),
+                end_anchor=end_anchor,
+                content=local_definition.text[len(local_definition.header) :],
+                occurrence=line_anchor_occurrence(
+                    upstream_source.splitlines(keepends=True),
+                    line_anchor(upstream_definition.header),
+                    upstream_definition.start_line - 1,
+                ),
+                strategy=f"dm-{upstream_definition.kind}-body-replace",
+                sort_index=upstream_definition.start_line,
+                dm_path=upstream_definition.path,
+            )
+
+    return PatchOperation(
+        mode="replace",
+        anchor=upstream_definition.text,
+        content=local_definition.text,
+        occurrence=block_occurrence(upstream_source, upstream_definition.text, upstream_definition.start_line - 1),
+        strategy=f"dm-{upstream_definition.kind}-replace",
+        sort_index=upstream_definition.start_line,
+        dm_path=upstream_definition.path,
+    )
+
+
+def infer_dm_definition_insert(
+    upstream_source: str,
+    local_definition: DmDefinition,
+    upstream_defs: dict[str, DmDefinition],
+    local_defs: dict[str, DmDefinition],
+) -> PatchOperation | None:
+    siblings = [
+        definition
+        for definition in local_defs.values()
+        if definition.parent_path == local_definition.parent_path
+        and definition.indent == local_definition.indent
+    ]
+    siblings.sort(key=lambda definition: definition.start_offset)
+    position = siblings.index(local_definition)
+
+    for sibling in reversed(siblings[:position]):
+        upstream_sibling = upstream_defs.get(sibling.path)
+        if upstream_sibling:
+            return PatchOperation(
+                mode="insert_after",
+                anchor=upstream_sibling.text,
+                content=local_definition.text,
+                occurrence=block_occurrence(upstream_source, upstream_sibling.text, upstream_sibling.start_line - 1),
+                strategy=f"dm-{local_definition.kind}-insert-after-sibling",
+                sort_index=upstream_sibling.end_line,
+                dm_path=local_definition.path,
+            )
+
+    for sibling in siblings[position + 1 :]:
+        upstream_sibling = upstream_defs.get(sibling.path)
+        if upstream_sibling:
+            return PatchOperation(
+                mode="insert_before",
+                anchor=upstream_sibling.text,
+                content=local_definition.text,
+                occurrence=block_occurrence(upstream_source, upstream_sibling.text, upstream_sibling.start_line - 1),
+                strategy=f"dm-{local_definition.kind}-insert-before-sibling",
+                sort_index=upstream_sibling.start_line,
+                dm_path=local_definition.path,
+            )
+
+    if local_definition.parent_path:
+        upstream_parent = upstream_defs.get(local_definition.parent_path)
+        if upstream_parent:
+            return PatchOperation(
+                mode="insert_after",
+                anchor=line_anchor(upstream_parent.header),
+                content=local_definition.text,
+                occurrence=line_anchor_occurrence(
+                    upstream_source.splitlines(keepends=True),
+                    line_anchor(upstream_parent.header),
+                    upstream_parent.start_line - 1,
+                ),
+                strategy=f"dm-{local_definition.kind}-insert-into-parent",
+                sort_index=upstream_parent.start_line,
+                dm_path=local_definition.path,
+            )
+    return None
+
+
+def leaf_paths(paths: set[str], all_change_paths: set[str]) -> set[str]:
+    leaves: set[str] = set()
+    for path in paths:
+        if any(is_descendant_path(other, path) for other in all_change_paths if other != path):
+            continue
+        leaves.add(path)
+    return leaves
+
+
+def is_descendant_path(path: str, possible_parent: str) -> bool:
+    return path.startswith(f"{possible_parent}/")
 
 
 def apply_patch_operations(source: str, operations: Iterable[PatchOperation]) -> str:
@@ -606,11 +778,17 @@ def render_module_manifest(
                 f"file = {toml_string(patch_file)}",
                 f"occurrence = {operation.occurrence}",
                 'risk = "converted_dynamic_dm"',
-                f"description = {toml_string(f'Generated by Dynamic DM using {operation.strategy}.')}",
+                f"description = {toml_string(operation_description(operation))}",
                 "",
             ]
         )
     return "\n".join(lines)
+
+
+def operation_description(operation: PatchOperation) -> str:
+    if operation.dm_path:
+        return f"Generated by Dynamic DM using {operation.strategy} at {operation.dm_path}."
+    return f"Generated by Dynamic DM using {operation.strategy}."
 
 
 def toml_string(value: str) -> str:

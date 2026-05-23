@@ -35,7 +35,11 @@ def main() -> None:
                 module_id: {
                     "dynamic_dm": {
                         "api_version": 1,
-                        "capabilities": ["dm_metadata_index", "dm_patch_conversion"],
+                        "capabilities": [
+                            "dm_metadata_index",
+                            "dm_patch_conversion",
+                            "dm_semantic_patch_conversion",
+                        ],
                     },
                 },
             },

@@ -70,12 +70,22 @@ python3 -m dynamic_dm migrate-modified \
   --out-dir /path/to/host/dynamic_modules/local/example-converted-dm
 ```
 
-The converter currently emits ordinary Dynamic SS13 Modules `[[patches]]`
-entries plus patch content files. It tries line replacements, single hunks,
-multiple hunks, bounded `replace_between` patches, contextual block
-replacements, and finally a full-file replace only when
+The converter emits ordinary Dynamic SS13 Modules `[[patches]]` entries plus
+patch content files. It first parses DM definitions and tries semantic
+operations around concrete paths such as `/datum/foo/proc/run` or
+`/datum/foo/var/value`. The parser understands common tgstation-style forms,
+including `/obj/item/foo/Initialize()` overrides, indented `proc/name()`
+members, `var/name` declarations, and type variable assignments like
+`name = "example"` while ignoring local proc variables. When semantic
+conversion cannot reproduce the edit exactly, it falls back to line
+replacements, single hunks, multiple hunks, bounded `replace_between` patches,
+contextual block replacements, and finally a full-file replace only when
 `--no-full-file-fallback` is not set. Full-file fallback is a maintainer escape
 hatch, not the preferred output.
+
+Machine-readable `--json` reports include `dm_path` for semantic operations.
+Generated module manifests also mention the DM path in patch descriptions when
+one is known.
 
 ## Local Development
 

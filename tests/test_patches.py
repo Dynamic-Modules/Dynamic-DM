@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from dynamic_dm.dm_ast import parse_dm_source
 from dynamic_dm.patches import (
     apply_patch_operations,
     create_patch_set,
@@ -42,7 +43,7 @@ class DynamicDmPatchTests(unittest.TestCase):
         )
 
         self.assertTrue(patch_set.changed)
-        self.assertEqual(patch_set.operations[0].mode, "replace_between")
+        self.assertIn(patch_set.operations[0].mode, {"replace", "replace_between"})
         self.assertEqual(
             apply_patch_operations(
                 "/datum/foo/proc/run()\n\tif(active)\n\t\told_call()\n\t\treturn TRUE\n\treturn FALSE\n",
@@ -56,6 +57,130 @@ class DynamicDmPatchTests(unittest.TestCase):
             "/datum/foo\n\tvar/a = 1\n\tvar/b = 2\n\tvar/c = 3\n",
             "/datum/foo\n\tvar/a = 10\n\tvar/b = 2\n\tvar/c = 30\n",
         )
+
+    def test_parses_indented_dm_members(self) -> None:
+        parsed = parse_dm_source(
+            "/datum/foo\n"
+            "\tname = \"foo\"\n"
+            "\tvar/value = 1\n"
+            "\tproc/run()\n"
+            "\t\tvar/local_value = value\n"
+            "\t\treturn value\n"
+        )
+        paths = [definition.path for definition in parsed.definitions]
+
+        self.assertIn("/datum/foo", paths)
+        self.assertIn("/datum/foo/var/name", paths)
+        self.assertIn("/datum/foo/var/value", paths)
+        self.assertIn("/datum/foo/proc/run", paths)
+        self.assertNotIn("/datum/foo/proc/run/var/local_value", paths)
+
+    def test_parses_absolute_proc_overrides_as_proc_paths(self) -> None:
+        parsed = parse_dm_source(
+            "/obj/item/foo/Initialize(mapload)\n"
+            "\t. = ..()\n"
+            "\treturn INITIALIZE_HINT_NORMAL\n"
+        )
+
+        definition = parsed.unique_definitions["/obj/item/foo/proc/Initialize"]
+        self.assertEqual(definition.kind, "proc")
+        self.assertEqual(definition.parent_path, "/obj/item/foo")
+
+    def test_ignores_comment_blocks_during_parse(self) -> None:
+        parsed = parse_dm_source(
+            "/*\n"
+            "/datum/commented\n"
+            "*/\n"
+            "/datum/real // trailing comment\n"
+            "\tvalue = 1 /* inline block comment */\n"
+        )
+        paths = [definition.path for definition in parsed.definitions]
+
+        self.assertNotIn("/datum/commented", paths)
+        self.assertIn("/datum/real", paths)
+        self.assertIn("/datum/real/var/value", paths)
+
+    def test_preprocessor_directives_do_not_end_proc_definitions(self) -> None:
+        parsed = parse_dm_source(
+            "/world/proc/Genesis()\n"
+            "#ifdef USE_THING\n"
+            "\t\treturn TRUE\n"
+            "#else\n"
+            "\t\tvar/local_reason\n"
+            "\t\treturn FALSE\n"
+            "#endif\n"
+            "/world/New()\n"
+            "\treturn ..()\n"
+        )
+        paths = [definition.path for definition in parsed.definitions]
+
+        self.assertIn("/world/proc/Genesis", paths)
+        self.assertNotIn("/var/local_reason", paths)
+        self.assertIn("/world/proc/New", paths)
+
+    def test_infers_proc_body_replacement_with_dm_path(self) -> None:
+        upstream = (
+            "/datum/foo/proc/run()\n"
+            "\tif(active)\n"
+            "\t\treturn TRUE\n"
+            "\treturn FALSE\n"
+            "/datum/foo/proc/other()\n"
+            "\treturn TRUE\n"
+        )
+        local = (
+            "/datum/foo/proc/run()\n"
+            "\tif(active)\n"
+            "\t\tlog_world(\"changed\")\n"
+            "\t\treturn FALSE\n"
+            "\treturn FALSE\n"
+            "/datum/foo/proc/other()\n"
+            "\treturn TRUE\n"
+        )
+        patch_set = create_patch_set(upstream, local, "code/example.dm")
+
+        self.assertEqual(patch_set.strategy, "dm semantic")
+        self.assertEqual(patch_set.operations[0].dm_path, "/datum/foo/proc/run")
+        self.assertEqual(patch_set.operations[0].mode, "replace_between")
+        self.assertEqual(apply_patch_operations(upstream, patch_set.operations), local)
+
+    def test_infers_new_proc_inside_existing_type(self) -> None:
+        upstream = (
+            "/datum/foo\n"
+            "\tvar/value = 1\n"
+            "\tproc/run()\n"
+            "\t\treturn value\n"
+        )
+        local = (
+            "/datum/foo\n"
+            "\tvar/value = 1\n"
+            "\tproc/run()\n"
+            "\t\treturn value\n"
+            "\tproc/extra()\n"
+            "\t\treturn value + 1\n"
+        )
+        patch_set = create_patch_set(upstream, local, "code/example.dm")
+
+        self.assertEqual(patch_set.strategy, "dm semantic")
+        self.assertEqual(patch_set.operations[0].dm_path, "/datum/foo/proc/extra")
+        self.assertIn("insert", patch_set.operations[0].mode)
+        self.assertEqual(apply_patch_operations(upstream, patch_set.operations), local)
+
+    def test_infers_type_var_assignment_replacement_with_dm_path(self) -> None:
+        upstream = (
+            "/obj/item/foo\n"
+            "\tname = \"old\"\n"
+            "\tdesc = \"same\"\n"
+        )
+        local = (
+            "/obj/item/foo\n"
+            "\tname = \"new\"\n"
+            "\tdesc = \"same\"\n"
+        )
+        patch_set = create_patch_set(upstream, local, "code/example.dm")
+
+        self.assertEqual(patch_set.strategy, "dm semantic")
+        self.assertEqual(patch_set.operations[0].dm_path, "/obj/item/foo/var/name")
+        self.assertEqual(apply_patch_operations(upstream, patch_set.operations), local)
 
     def test_repeated_multiline_block_uses_correct_occurrence(self) -> None:
         upstream = (
