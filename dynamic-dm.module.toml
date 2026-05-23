@@ -1,6 +1,6 @@
 id = "dynamic-dm"
 name = "Dynamic DM"
-version = "0.2.0"
+version = "1.0.0"
 module_api = "1"
 description = "DM-side prepare metadata and dynamic patch conversion support."
 
@@ -10,7 +10,7 @@ default_branch = "main"
 
 [compat]
 target = "tgstation"
-minimum_dynamic_modules = "0.2.0"
+minimum_dynamic_modules = "1.0.0"
 
 [build]
 dm_files = []

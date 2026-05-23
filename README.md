@@ -1,8 +1,9 @@
 # Dynamic DM
 
 Dynamic DM is a core Dynamic SS13 Modules integration module for DM-side build
-metadata. It is the home for future DM-aware prepare behavior that should be
-updateable as a module instead of hardcoded into the framework bootstrap.
+metadata and maintainer-side DM patch conversion. It keeps DM-aware release
+behavior updateable as a module instead of hardcoded into the framework
+bootstrap.
 
 The prepare slice is intentionally conservative:
 
@@ -23,7 +24,7 @@ Install this repo as a Dynamic SS13 module and include
 `dynamic-dm.module.toml`. The prepare plugin runs during
 `dynamic-modules prepare` and publishes the DM metadata index.
 
-Modules that want to rely on future Dynamic DM features should declare a normal
+Modules that rely on Dynamic DM conversion or metadata should declare a normal
 dependency:
 
 ```toml
@@ -75,3 +76,12 @@ multiple hunks, bounded `replace_between` patches, contextual block
 replacements, and finally a full-file replace only when
 `--no-full-file-fallback` is not set. Full-file fallback is a maintainer escape
 hatch, not the preferred output.
+
+## Local Development
+
+Run the test suite from this repo:
+
+```bash
+python3 -m unittest discover -s tests
+python3 -m py_compile prepare_plugin.py dynamic_dm/*.py
+```
