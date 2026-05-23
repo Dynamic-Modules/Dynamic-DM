@@ -1,0 +1,25 @@
+id = "dynamic-dm"
+name = "Dynamic DM"
+version = "0.1.0"
+module_api = "1"
+description = "DM-side prepare metadata and future dynamic DM integration support."
+
+[source]
+repo = "https://github.com/Dynamic-Modules/Dynamic-DM.git"
+default_branch = "main"
+
+[compat]
+target = "tgstation"
+minimum_dynamic_modules = "0.2.0"
+
+[build]
+dm_files = []
+test_files = []
+assets = []
+tgui = []
+
+[[prepare_plugins]]
+id = "dynamic-dm-index"
+command = "python3"
+args = ["prepare_plugin.py"]
+description = "Writes a focused DM metadata index for modules and maintainer tools."
