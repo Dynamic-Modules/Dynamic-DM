@@ -1,8 +1,8 @@
 id = "dynamic-dm"
 name = "Dynamic DM"
-version = "0.1.0"
+version = "0.2.0"
 module_api = "1"
-description = "DM-side prepare metadata and future dynamic DM integration support."
+description = "DM-side prepare metadata and dynamic patch conversion support."
 
 [source]
 repo = "https://github.com/Dynamic-Modules/Dynamic-DM.git"

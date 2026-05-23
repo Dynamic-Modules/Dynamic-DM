@@ -1,0 +1,15 @@
+[project]
+name = "dynamic-dm"
+version = "0.2.0"
+description = "Dynamic DM maintainer tooling for Dynamic SS13 Modules."
+requires-python = ">=3.11"
+
+[project.scripts]
+dynamic-dm = "dynamic_dm.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dynamic_dm*"]
